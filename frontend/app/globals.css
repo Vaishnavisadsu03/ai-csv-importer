@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* GrowEasy Light Theme */
+    --background: 0 0% 100%;
+    --foreground: 164 54% 12%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 164 54% 12%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 164 54% 12%;
+
+    /* Primary: GrowEasy deep teal #1a5c4f */
+    --primary: 164 56% 23%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary: light teal tint */
+    --secondary: 164 30% 92%;
+    --secondary-foreground: 164 56% 23%;
+
+    --muted: 164 20% 95%;
+    --muted-foreground: 164 20% 40%;
+
+    /* Accent: GrowEasy orange #f4722b */
+    --accent: 21 90% 56%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 164 20% 88%;
+    --input: 164 20% 88%;
+    --ring: 164 56% 23%;
+
+    --radius: 0.75rem;
+
+    /* Custom GrowEasy tokens */
+    --groweasy-teal: 164 56% 23%;
+    --groweasy-teal-light: 164 40% 35%;
+    --groweasy-orange: 21 90% 56%;
+    --groweasy-green-accent: 162 68% 47%;
+  }
+
+  .dark {
+    --background: 164 40% 6%;
+    --foreground: 164 20% 95%;
+
+    --card: 164 35% 10%;
+    --card-foreground: 164 20% 95%;
+
+    --popover: 164 35% 10%;
+    --popover-foreground: 164 20% 95%;
+
+    --primary: 164 50% 40%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 164 30% 15%;
+    --secondary-foreground: 164 20% 90%;
+
+    --muted: 164 25% 15%;
+    --muted-foreground: 164 20% 60%;
+
+    --accent: 21 90% 56%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 40%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 164 25% 18%;
+    --input: 164 25% 18%;
+    --ring: 164 50% 40%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+/* GrowEasy brand gradient */
+.groweasy-gradient {
+  background: linear-gradient(135deg, hsl(164, 56%, 18%) 0%, hsl(164, 50%, 28%) 100%);
+}
+
+/* Shimmer loading effect */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 25%,
+    hsl(var(--secondary)) 50%,
+    hsl(var(--muted)) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s infinite linear;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: hsl(var(--muted));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--primary) / 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary) / 0.6);
+}
