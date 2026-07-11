@@ -3,11 +3,6 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
 
-  // Server Actions are stable in Next.js 15 — no longer under experimental
-  serverActions: {
-    bodySizeLimit: "10mb",
-  },
-
   async rewrites() {
     return [
       {
