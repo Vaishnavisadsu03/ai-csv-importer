@@ -33,7 +33,6 @@ export async function parseCsvFile(filePath: string, fileName: string): Promise<
   const result = Papa.parse<RawCsvRow>(fileContent, {
     header: true,
     skipEmptyLines: true,
-    trimHeaders: true,
     dynamicTyping: false, // Keep everything as strings — AI handles type coercion
     transformHeader: (header: string) => header.trim(),
   });

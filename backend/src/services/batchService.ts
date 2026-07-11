@@ -37,10 +37,6 @@ function parseRetryAfterMs(errorMessage: string): number | null {
   return null;
 }
 
-function isRateLimitError(errorMessage: string): boolean {
-  return errorMessage.includes("429") || errorMessage.toLowerCase().includes("rate limit") || errorMessage.toLowerCase().includes("quota");
-}
-
 /**
  * Processes all rows in configurable batches.
  * Respects OpenAI rate limits with per-batch delays and smart 429 back-off.
