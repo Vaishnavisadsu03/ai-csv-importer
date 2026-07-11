@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { useDropzone } from "react-dropzone";
+import { useDropzone, FileRejection } from "react-dropzone";
 import { Upload, FileText, AlertCircle, X, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -28,7 +28,7 @@ export function Step1Upload({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
   const onDrop = useCallback(
-    (acceptedFiles: File[], rejectedFiles: { errors: { message: string }[] }[]) => {
+    (acceptedFiles: File[], rejectedFiles: FileRejection[]) => {
       setLocalError(null);
 
       if (rejectedFiles.length > 0) {
