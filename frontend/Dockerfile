@@ -15,6 +15,9 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Accept build-time env var from Railway
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
@@ -36,12 +39,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 # Copy Next.js static assets
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
-# Copy public folder ONLY if it exists
-# If you don't have a public folder, either:
-# 1. Leave this line commented, OR
-# 2. Create frontend/public/.gitkeep and uncomment it.
-
-# COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+# Copy public folder
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 USER nextjs
 

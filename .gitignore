@@ -13,8 +13,11 @@ out/
 .env
 .env.local
 .env.development
-.env.production
 *.env
+
+# Allow .env.production — no secrets, needed for Railway Docker build
+!.env.production
+!frontend/.env.production
 
 # Logs
 logs/
