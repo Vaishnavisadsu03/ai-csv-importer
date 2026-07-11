@@ -2,7 +2,7 @@ import { config } from "../config";
 import { logger } from "../utils/logger";
 import { sleep } from "../utils/sleep";
 import { chunkArray } from "../utils/chunkArray";
-import { mapRowsWithAi, isRateLimitError, isTokenSizeError } from "./aiService";
+import { mapRowsWithAi, classifyGroqError } from "./aiService";
 import type {
   RawCsvRow,
   CrmRecord,
@@ -21,25 +21,23 @@ export interface BatchProcessOptions {
 }
 
 /**
- * Extracts the Retry-After seconds from a 429 error message if present.
- * OpenAI errors look like: "429 ... Please retry after 20s"
+ * Parses a "retry after N seconds" hint from a Groq rate-limit message.
  */
 function parseRetryAfterMs(errorMessage: string): number | null {
-  const match = errorMessage.match(/retry after (\d+(\.\d+)?)\s*s/i);
-  if (match && match[1]) {
-    return Math.ceil(parseFloat(match[1]) * 1000) + 500; // add 500ms buffer
-  }
-  // Some responses say "Please try again in 20s"
-  const match2 = errorMessage.match(/try again in (\d+(\.\d+)?)\s*s/i);
-  if (match2 && match2[1]) {
-    return Math.ceil(parseFloat(match2[1]) * 1000) + 500;
+  const m =
+    errorMessage.match(/retry after (\d+(?:\.\d+)?)\s*s/i) ??
+    errorMessage.match(/try again in (\d+(?:\.\d+)?)\s*s/i);
+  if (m?.[1]) {
+    return Math.ceil(parseFloat(m[1]) * 1000) + 500;
   }
   return null;
 }
 
 /**
- * Processes all rows in configurable batches.
- * Respects OpenAI rate limits with per-batch delays and smart 429 back-off.
+ * Processes all CSV rows in configurable batches through the AI mapping pipeline.
+ * - Only sends the current batch to the AI — never the full CSV.
+ * - Retries only on retryable errors (429, 503, network).
+ * - Fails fast on non-retryable errors (400, 401, 403, 413, context exceeded).
  */
 export async function processBatches(
   rows: RawCsvRow[],
@@ -49,11 +47,6 @@ export async function processBatches(
   const batchSize = options.batchSize ?? config.batch.size;
   const maxRetries = options.maxRetries ?? config.batch.maxRetries;
   const retryDelayMs = options.retryDelayMs ?? config.batch.retryDelayMs;
-
-  // Delay between successful batches — critical for rate limit compliance.
-  // Free tier: ~3 RPM → need ~20s between requests minimum.
-  // Paid tier (Tier 1): ~500 RPM → 200ms is fine.
-  // Default from env, falls back to 2000ms (safe for most tiers).
   const delayBetweenBatchesMs =
     options.delayBetweenBatchesMs ??
     parseInt(process.env["DELAY_BETWEEN_BATCHES_MS"] ?? "2000", 10);
@@ -75,41 +68,47 @@ export async function processBatches(
     const startRow = batchIndex * batchSize;
     const endRow = startRow + batch.length - 1;
 
-    logger.debug(
-      { batchIndex, startRow, endRow, rowCount: batch.length },
+    logger.info(
+      {
+        batchIndex,
+        batchNumber: batchIndex + 1,
+        totalBatches,
+        startRow,
+        endRow,
+        rowCount: batch.length,
+      },
       `Processing batch ${batchIndex + 1}/${totalBatches}`
     );
 
     let retryCount = 0;
     let success = false;
 
-    while (retryCount <= maxRetries && !success) {
+    while (!success) {
       try {
-        // ── Delay before every attempt (not just retries) ──────────────────
-        // First batch, first attempt: no delay needed.
-        // All other cases: respect the configured inter-batch delay.
+        // Inter-batch delay (skip for first batch, first attempt)
         if (batchIndex > 0 || retryCount > 0) {
           const waitMs =
             retryCount === 0
               ? delayBetweenBatchesMs
-              : retryDelayMs * Math.pow(2, retryCount - 1);
+              : Math.min(retryDelayMs * Math.pow(2, retryCount - 1), 60_000);
 
           logger.debug(
             { batchIndex, retryCount, waitMs },
             retryCount === 0
-              ? `Waiting ${waitMs}ms before next batch`
-              : `Retry back-off: waiting ${waitMs}ms`
+              ? `Inter-batch delay: ${waitMs}ms`
+              : `Retry back-off: ${waitMs}ms (attempt ${retryCount + 1}/${maxRetries + 1})`
           );
 
           await sleep(waitMs);
         }
 
+        // Send ONLY the current batch — never the full rows array
         const result = await mapRowsWithAi({ rows: batch, columns });
 
-        // Adjust row indices to be absolute
+        // Adjust row indices to absolute positions in the full CSV
         const adjustedSkipped: SkippedRow[] = result.skippedRows.map((sr) => ({
           ...sr,
-          rowIndex: sr.rowIndex + startRow,
+          rowIndex: sr.rowIndex >= 0 ? sr.rowIndex + startRow : sr.rowIndex,
         }));
 
         allRecords.push(...result.records);
@@ -117,44 +116,89 @@ export async function processBatches(
         success = true;
 
         logger.info(
-          { batchIndex, mapped: result.records.length, skipped: result.skippedRows.length },
+          {
+            batchIndex,
+            batchNumber: batchIndex + 1,
+            totalBatches,
+            mapped: result.records.length,
+            skipped: result.skippedRows.length,
+          },
           `Batch ${batchIndex + 1}/${totalBatches} complete`
         );
 
         options.onBatchComplete?.(batchIndex, totalBatches, result.records);
 
       } catch (err) {
-        retryCount++;
         const errorMessage = err instanceof Error ? err.message : String(err);
-        const isRateLimit = isRateLimitError(errorMessage);
-        const isTooBig   = isTokenSizeError(errorMessage);
+        const info = classifyGroqError(err);
 
         logger.error(
-          { batchIndex, retryCount, maxRetries, isRateLimit, isTooBig, error: errorMessage },
-          `Batch ${batchIndex + 1} failed (attempt ${retryCount}/${maxRetries + 1})`
+          {
+            batchIndex,
+            batchNumber: batchIndex + 1,
+            retryCount,
+            maxRetries,
+            errorType: info.type,
+            retryable: info.retryable,
+            statusCode: info.statusCode,
+            requestId: info.requestId,
+            error: info.message,
+          },
+          `Batch ${batchIndex + 1} failed — type: ${info.type}`
         );
 
-        // Token-size errors will NEVER succeed by retrying — fail fast
-        if (isTooBig) {
+        // ── Non-retryable errors — fail this batch immediately ───────────
+        if (!info.retryable) {
+          const friendlyError = info.type === "context_exceeded"
+            ? `Prompt exceeds model context window (reduce BATCH_SIZE). Detail: ${info.message}`
+            : info.type === "auth_error"
+            ? `Groq authentication failed — check GROQ_API_KEY. Detail: ${info.message}`
+            : info.type === "invalid_request"
+            ? `Invalid request sent to Groq. Detail: ${info.message}`
+            : info.message;
+
           logger.warn(
-            { batchIndex, batchSize: batch.length },
-            "Batch too large for model token limit — skipping without retry. Reduce BATCH_SIZE."
+            { batchIndex, errorType: info.type },
+            `Non-retryable error — skipping batch ${batchIndex + 1} without retry`
           );
-          allErrors.push({ batchIndex, startRow, endRow, error: "Batch too large (token limit)", retryCount: 0 });
-          options.onBatchError?.(batchIndex, errorMessage);
+
+          allErrors.push({
+            batchIndex,
+            startRow,
+            endRow,
+            error: friendlyError,
+            retryCount,
+          });
+
           for (let i = 0; i < batch.length; i++) {
             allSkippedRows.push({
               rowIndex: startRow + i,
-              reason: "Batch exceeded model token limit",
+              reason: `Batch failed (${info.type}): ${friendlyError.slice(0, 120)}`,
               originalData: batch[i] ?? {},
             });
           }
-          break; // exit the while loop for this batch immediately
+
+          options.onBatchError?.(batchIndex, friendlyError);
+          break; // exit while loop, move to next batch
         }
 
+        // ── Retryable errors ──────────────────────────────────────────────
+        retryCount++;
+
         if (retryCount > maxRetries) {
-          allErrors.push({ batchIndex, startRow, endRow, error: errorMessage, retryCount: retryCount - 1 });
-          options.onBatchError?.(batchIndex, errorMessage);
+          logger.warn(
+            { batchIndex, retryCount, maxRetries },
+            `Batch ${batchIndex + 1} exhausted all ${maxRetries} retries`
+          );
+
+          allErrors.push({
+            batchIndex,
+            startRow,
+            endRow,
+            error: `${info.message} (failed after ${maxRetries} retries)`,
+            retryCount,
+          });
+
           for (let i = 0; i < batch.length; i++) {
             allSkippedRows.push({
               rowIndex: startRow + i,
@@ -162,17 +206,32 @@ export async function processBatches(
               originalData: batch[i] ?? {},
             });
           }
-        } else if (isRateLimit) {
-          const waitMs = Math.min(retryDelayMs * Math.pow(2, retryCount) + Math.random() * 1000, 60_000);
-          logger.info({ batchIndex, waitMs }, `Rate limited — waiting ${(waitMs / 1000).toFixed(1)}s`);
-          await sleep(waitMs);
+
+          options.onBatchError?.(batchIndex, errorMessage);
+          break;
         }
+
+        // Honour Groq's Retry-After hint if present
+        const retryAfterMs = parseRetryAfterMs(errorMessage);
+        const backOffMs = retryAfterMs ??
+          Math.min(retryDelayMs * Math.pow(2, retryCount) + Math.random() * 1000, 60_000);
+
+        logger.info(
+          { batchIndex, retryCount, maxRetries, waitMs: backOffMs, errorType: info.type },
+          `Retryable error (${info.type}) — retrying in ${(backOffMs / 1000).toFixed(1)}s`
+        );
+
+        await sleep(backOffMs);
       }
     }
   }
 
   logger.info(
-    { totalRecords: allRecords.length, totalSkipped: allSkippedRows.length, totalErrors: allErrors.length },
+    {
+      totalRecords: allRecords.length,
+      totalSkipped: allSkippedRows.length,
+      totalErrors: allErrors.length,
+    },
     "Batch processing complete"
   );
 
